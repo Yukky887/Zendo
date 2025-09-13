@@ -1,0 +1,6 @@
+@YukkyServiceWeb_HostAddress = http://localhost:5043
+
+GET {{YukkyServiceWeb_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
