@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using YukkyServiceWeb.Data;
+using YukkyServiceWeb.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,6 +12,12 @@ builder.Logging.AddDebug();
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.Configure<YooMoneySettings>(
+    builder.Configuration.GetSection("YuMoney")); 
+
+builder.Services.AddHttpClient<YooMoneyService>();
+builder.Services.AddScoped<YooMoneyService>();
 
 // Настраиваем PostgreSQL
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");

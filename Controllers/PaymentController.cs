@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using YukkyServiceWeb.Data;
 using YukkyServiceWeb.DTOs;
 using YukkyServiceWeb.Models;
+using YukkyServiceWeb.Services;
 
 namespace YukkyServiceWeb.Controllers;
 
@@ -12,11 +13,14 @@ public class PaymentController : ControllerBase
 {
     private readonly ApplicationDbContext _context;
     private readonly ILogger<PaymentController> _logger;
+    private readonly YooMoneyService _yooMoneyService;
 
-    public PaymentController(ApplicationDbContext context, ILogger<PaymentController> logger)
+    public PaymentController(ApplicationDbContext context, ILogger<PaymentController> logger,
+        YooMoneyService yooMoneyService)
     {
         _context = context;
         _logger = logger;
+        _yooMoneyService = yooMoneyService;
     }
 
     [HttpPost]
@@ -27,7 +31,7 @@ public class PaymentController : ControllerBase
             return NotFound("Service not found");
 
         var userId = 1;
-        
+
         var payment = new Payment
         {
             UserId = userId,
@@ -89,7 +93,7 @@ public class PaymentController : ControllerBase
                 subscription.ExpiryDate = DateTime.UtcNow.AddDays(payment.Service.BillingPeriodDays);
             else
                 subscription.ExpiryDate = subscription.ExpiryDate.AddDays(payment.Service.BillingPeriodDays);
-            
+
             subscription.IsActive = true;
         }
 
@@ -117,4 +121,107 @@ public class PaymentController : ControllerBase
             .ToListAsync();
         return Ok(payments);
     }
+
+    [HttpPost("yoomoney/create")]
+    public async Task<IActionResult> CreateYooMoneyPayment([FromBody] CreatePaymentRequestDto request)
+    {
+        var service = await _context.Services.FindAsync(request.ServiceId);
+        
+        if (request == null || request.ServiceId == 0)
+            return BadRequest("ServiceId is required");
+
+        if (service == null)
+            return NotFound("Service not found");
+
+        var userId = 1; // Заглушка, потом заменим на реальный ID из JWT
+
+        // Создаем запись о платеже
+        var payment = new Payment
+        {
+            UserId = userId,
+            ServiceId = request.ServiceId,
+            Amount = service.Price,
+            Status = PaymentStatus.Pending,
+            CreatedDate = DateTime.UtcNow
+        };
+
+        _context.Payments.Add(payment);
+        await _context.SaveChangesAsync();
+
+        // Генерируем URL для оплаты через ЮMoney
+        var paymentUrl = _yooMoneyService.CreatePaymentUrl(
+            payment.Amount,
+            $"Оплата услуги: {service.Name}",
+            payment.Id.ToString()
+        );
+
+        _logger.LogInformation($"Created YooMoney payment {payment.Id} for service {service.Name}");
+
+        return Ok(new
+        {
+            PaymentId = payment.Id,
+            Amount = payment.Amount,
+            Status = payment.Status,
+            Service = service.Name,
+            PaymentUrl = paymentUrl // Добавляем URL для перенаправления
+        });
+    }
+
+    [HttpGet("yoomoney/callback")]
+    public async Task<IActionResult> YooMoneyCallback([FromQuery] string code, [FromQuery] string state)
+    {
+        try
+        {
+            // state содержит paymentId
+            if (!int.TryParse(state, out int paymentId))
+                return BadRequest("Invalid payment id");
+
+            // Получаем токен доступа
+            var tokenResponse = await _yooMoneyService.GetAccessTokenAsync(code);
+
+            // Обновляем платеж
+            var payment = await _context.Payments.FindAsync(paymentId);
+            if (payment != null)
+            {
+                payment.Status = PaymentStatus.Paid;
+                await _context.SaveChangesAsync();
+            }
+
+            return Ok(new
+            {
+                Message = "Payment authorized successfully",
+                Token = tokenResponse
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in YooMoney callback");
+            return StatusCode(500, "Internal server error");
+        }
+    }
+
+    [HttpPost("yoomoney/notification")]
+    public async Task<IActionResult> YooMoneyNotification([FromBody] YooMoneyNotification notification)
+    {
+        // Здесь будет обработка вебхуков от ЮMoney о статусе платежей
+        _logger.LogInformation("Notification received: {@Notification}", notification);
+
+        return Ok();
+    }
 }
+
+public class YooMoneyNotification
+{
+    public string OperationId { get; set; }
+    public string NotificationType { get; set; }
+    public string DateTime { get; set; }
+    public string Sha1Hash { get; set; }
+    public string Sender { get; set; }
+    public string Codepro { get; set; }
+    public string Currency { get; set; }
+    public string Amount { get; set; }
+    public string Label { get; set; }
+}
+
+
+    
